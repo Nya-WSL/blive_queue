@@ -1,0 +1,4 @@
+[submodule "blivedm"]
+	path = blivedm
+	url = https://github.com/Nya-WSL/blivedm
+	branch = dev
