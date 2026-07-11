@@ -50,14 +50,20 @@ for file in os.listdir(os.getcwd()):
 SESSDATA = ""
 
 session: Optional[aiohttp.ClientSession] = None
+client = None
+_client_task: Optional[asyncio.Task] = None
+_pending_refresh = False
 
 
 async def start_handler():
+    global client, _client_task
     init_session()
     try:
         await run_client()
     finally:
         await session.close()
+        client = None
+        _client_task = None
 
 
 def init_session():
@@ -73,15 +79,16 @@ def init_session():
 async def run_client():
     global client
     room_id = base_config.get("general", "room_id", 3)
-    client = blivedm.BLiveClient(room_id, session=session)
+    _client = blivedm.BLiveClient(room_id, session=session)
+    client = _client
     handler = BiliHandler()
-    client.set_handler(handler)
-    client.start()
+    _client.set_handler(handler)
+    _client.start()
 
     try:
-        await client.join()
+        await _client.join()
     finally:
-        await client.stop_and_close()
+        await _client.stop_and_close()
 
 
 def append_queue(uname: str):
@@ -110,7 +117,8 @@ def append_queue(uname: str):
         ui.notify(f"{uname} 已加入队列: {len(queues) - 1}", type="positive")
 
     # 标记待刷新，由 check_sort_update 在非拖拽状态下统一刷新，避免拖拽中销毁 DOM
-    ui.run_javascript("window._queuePendingRefresh = true;")
+    global _pending_refresh
+    _pending_refresh = True
 
 
 def delete_queue(index):
@@ -154,8 +162,8 @@ def update_queue(new_order):
     with open(queue_file, "w", encoding="utf-8") as f:
         f.writelines(q + "\n" for q in reordered)
 
-    with main_card:
-        ui.notify("队列顺序已更新", type="positive")
+    # with main_card:
+    #     ui.notify("队列顺序已更新", type="positive")
 
 
 def check_sessdata() -> bool:
@@ -236,13 +244,15 @@ class BiliHandler(blivedm.BaseHandler):
         uname = message.uname
         msg = message.msg
 
-        for i in config["str"]["queue_keyword"]:
+        for i in base_config.get("str", "queue_keyword", ["排队"]):
             if re.search(re.escape(i), msg):
                 append_queue(uname)
                 logger.info(f"[{client.room_id}] {uname}: {msg} 触发排队")
                 break
 
-    async def _on_gift(self, client: blivedm.BLiveClient, message: web_models.GiftMessage):
+    async def _on_gift(
+        self, client: blivedm.BLiveClient, message: web_models.GiftMessage
+    ):
         pass
 
     async def _on_user_toast_v2(
@@ -256,7 +266,7 @@ class BiliHandler(blivedm.BaseHandler):
         uname = message.uname
         msg = message.message
 
-        for i in config["str"]["queue_keyword"]:
+        for i in base_config.get("str", "queue_keyword", ["排队"]):
             if re.search(re.escape(i), msg):
                 append_queue(uname)
                 logger.info(f"[{client.room_id}][SC] {uname}: {msg} 触发排队")
@@ -290,29 +300,26 @@ def _():
 
             async def check_sort_update():
                 nonlocal _prev_order
+                global _pending_refresh
                 result = await ui.run_javascript("""
                     if (document.querySelector('.sortable-drag, .sortable-ghost, .sortable-chosen'))
                         return '__DRAGGING__';
                     const items = document.querySelectorAll('[data-queue-uname]');
                     if (!items.length) return null;
-                    const order = Array.from(items).map(item =>
+                    return JSON.stringify(Array.from(items).map(item =>
                         item.getAttribute('data-queue-uname')
-                    );
-                    const pending = window._queuePendingRefresh ? true : false;
-                    window._queuePendingRefresh = false;
-                    return JSON.stringify({order: order, pending: pending});
+                    ));
                 """)
-                if result is None or result == '__DRAGGING__':
+                if result is None or result == "__DRAGGING__":
                     return
-                data = json.loads(result)
-                new_order = data["order"]
-                pending = data["pending"]
+                new_order = json.loads(result)
                 order_str = json.dumps(new_order, sort_keys=True)
                 if _prev_order is not None and order_str != _prev_order:
                     if new_order:
                         update_queue(new_order)
                 _prev_order = order_str
-                if pending:
+                if _pending_refresh:
+                    _pending_refresh = False
                     try:
                         user_card.clear()
                         user_page()
@@ -328,9 +335,28 @@ def _():
             room_id_input.bind_value(
                 config["general"], "room_id"
             )  # 实时写入房间号到配置文件
-            ui.switch("连接至弹幕服务器").on_value_change(
-                lambda e: start_handler() if e else client.stop()
-            )
+
+            async def toggle_connection(e):
+                global client, _client_task
+                if e.value:
+                    # 打开连接
+                    if _client_task and not _client_task.done():
+                        ui.notify("弹幕服务器已连接", type="warning")
+                        return
+                    _client_task = asyncio.create_task(start_handler())
+                    logger.info("已连接至弹幕服务器")
+                else:
+                    # 关闭连接
+                    if _client_task and not _client_task.done():
+                        if client:
+                            client.stop()
+                        _client_task = None
+                        client = None
+                    with main_card:
+                        ui.notify("已断开弹幕服务器", type="warning")
+                        logger.info("已断开弹幕服务器")
+
+            ui.switch("连接至弹幕服务器", on_change=toggle_connection)
 
 
 if __name__ == "__main__":
