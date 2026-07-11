@@ -10,6 +10,13 @@ port = 65000 # 监听端口
 [bool]
 check_update = true # 是否启用更新检查
 check_sha256 = true # 是否启用更新包SHA256校验
+
+[str]
+queue_keyword = ["1", "排队"] # 弹幕关键字
+queue_file = "queue.txt" # 队列文件路径
+
+[cookies]
+SESSDATA = "" # B站SESSDATA
 '''
 
 class Config:
