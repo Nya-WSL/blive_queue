@@ -71,6 +71,7 @@ def init_session():
 
 
 async def run_client():
+    global client
     room_id = base_config.get("general", "room_id", 3)
     client = blivedm.BLiveClient(room_id, session=session)
     handler = BiliHandler()
@@ -97,22 +98,19 @@ def append_queue(uname: str):
         无显式异常抛出；页面刷新失败时异常会被静默捕获
     """
     with open(queue_file, "r", encoding="utf-8") as f:
-        queues = f.readlines()
+        queues = [line.strip("\n") for line in f.readlines()]
 
     if uname not in queues:
         queues.append(uname)
 
     with open(queue_file, "w", encoding="utf-8") as f:
-        f.writelines(queues)
+        f.writelines(q + "\n" for q in queues)
 
-    ui.notify(f"{uname} 已加入队列: {queues.index(uname) + 1}", type="positive")
+    with main_card:
+        ui.notify(f"{uname} 已加入队列: {len(queues) - 1}", type="positive")
 
-    # 刷新 user_card 显示最新队列
-    try:
-        user_card.clear()
-        user_page()
-    except Exception:
-        pass
+    # 标记待刷新，由 check_sort_update 在非拖拽状态下统一刷新，避免拖拽中销毁 DOM
+    ui.run_javascript("window._queuePendingRefresh = true;")
 
 
 def delete_queue(index):
@@ -126,41 +124,43 @@ def delete_queue(index):
         None
     """
     with open(queue_file, "r", encoding="utf-8") as f:
-        queues = f.readlines()
+        queues = [line.strip("\n") for line in f.readlines()]
 
     uname = queues.pop(index)
 
     with open(queue_file, "w", encoding="utf-8") as f:
-        f.writelines(queues)
+        f.writelines(q + "\n" for q in queues)
 
-    ui.notify(f"已从队列移除{uname}")
+    with main_card:
+        ui.notify(f"已从队列移除 {uname}")
 
 
 def update_queue(new_order):
-    """根据新的顺序索引重新排列队列文件中的条目，并持久化写入文件
+    """根据新的用户顺序重新排列队列文件，并持久化写入文件
 
     Args:
-        new_order (list[int]): 新的顺序索引列表，每个元素为原始队列中的位置索引，
-            用于指定条目在新顺序中的排列位置
+        new_order (list[str]): 拖拽排序后的用户名列表（按新顺序排列）
 
     Returns:
         None
     """
     with open(queue_file, "r", encoding="utf-8") as f:
-        queues = f.readlines()
+        queues = [line.strip("\n") for line in f.readlines()]
 
     header = queues[0]
-    reordered = [header] + [queues[i + 1] for i in new_order]
+    # 按 new_order 中的用户名顺序重建
+    reordered = [header] + new_order
 
     with open(queue_file, "w", encoding="utf-8") as f:
-        f.writelines(reordered)
+        f.writelines(q + "\n" for q in reordered)
 
-    ui.notify("队列顺序已更新", type="positive")
+    with main_card:
+        ui.notify("队列顺序已更新", type="positive")
 
 
 def check_sessdata() -> bool:
     """检查 SESSDATA 是否已配置
-    
+
     Returns:
         bool: SESSDATA 存在且非空时返回 True，否则返回 False
     """
@@ -174,8 +174,6 @@ def login_page():
         status = api.login(loginInfo[0])
 
         if status == True:
-            ui.notify("登录成功", type="positive")
-
             try:
                 os.remove(loginInfo[1])
             except:
@@ -210,35 +208,64 @@ def user_page():
 
     with user_card:
         with open(queue_file, "r", encoding="utf-8") as f:
-            queues = f.readlines()
+            queues = [line.strip("\n") for line in f.readlines()]
         queues.pop(0)
-        for idx, user in enumerate(queues):
+        for idx, uname in enumerate(queues):
             row = ui.row().classes("items-center gap-2")
-            row.props(f'data-queue-index="{idx}"')
+            row.props(f'data-queue-index="{idx}" data-queue-uname="{uname}"')
             with row:
-                ui.icon("drag_indicator").classes("handle cursor-grab active:cursor-grabbing")
-                ui.label(user.strip())
-                ui.space()
-                ui.button(icon="delete", on_click=lambda i=idx: del_and_refresh(i)).props(
-                    "flat round dense"
+                ui.icon("drag_indicator").classes(
+                    "handle cursor-grab active:cursor-grabbing"
                 )
+                ui.label(uname)
+                ui.space()
+                ui.button(
+                    icon="delete", on_click=lambda i=idx: del_and_refresh(i)
+                ).props("flat round dense")
 
 
 class BiliHandler(blivedm.BaseHandler):
-    def _on_heartbeat(self, client: blivedm.BLiveClient):
-        print(f"[{client.room_id}] 心跳")
+    async def _on_heartbeat(
+        self, client: blivedm.BLiveClient, message: web_models.HeartbeatMessage
+    ):
+        logger.debug(f"[{client.room_id}] 心跳")
 
-    def _on_danmaku(
+    async def _on_danmaku(
         self, client: blivedm.BLiveClient, message: web_models.DanmakuMessage
     ):
         uname = message.uname
         msg = message.msg
 
         for i in config["str"]["queue_keyword"]:
-            if re.search(i, msg):
+            if re.search(re.escape(i), msg):
                 append_queue(uname)
                 logger.info(f"[{client.room_id}] {uname}: {msg} 触发排队")
                 break
+
+    async def _on_gift(self, client: blivedm.BLiveClient, message: web_models.GiftMessage):
+        pass
+
+    async def _on_user_toast_v2(
+        self, client: blivedm.BLiveClient, message: web_models.UserToastV2Message
+    ):
+        pass
+
+    async def _on_super_chat(
+        self, client: blivedm.BLiveClient, message: web_models.SuperChatMessage
+    ):
+        uname = message.uname
+        msg = message.message
+
+        for i in config["str"]["queue_keyword"]:
+            if re.search(re.escape(i), msg):
+                append_queue(uname)
+                logger.info(f"[{client.room_id}][SC] {uname}: {msg} 触发排队")
+                break
+
+    async def _on_interact_word_v2(
+        self, client: blivedm.BLiveClient, message: web_models.InteractWordV2Message
+    ):
+        pass
 
 
 @ui.page("/")
@@ -252,48 +279,48 @@ def _():
         if not check_sessdata():
             login_page()
         else:
-            with ui.card(align_items="center").classes("w-2/3 queue-sortable") as user_card:
+            with ui.card(align_items="center").classes(
+                "w-2/3 queue-sortable"
+            ) as user_card:
                 user_page()
             user_card.make_sortable(handle=".handle")
 
-            # 监听拖拽排序变化，更新 queue_file
-            ui.run_javascript(
-                """
-                window._queueSortChanged = false;
-                window._queueNewOrder = null;
-
-                setTimeout(() => {
-                    const container = document.querySelector('.queue-sortable');
-                    if (!container) return;
-                    const sortable = container.sortable || (window.Sortable && window.Sortable.get(container));
-                    if (!sortable) return;
-
-                    sortable.option('onEnd', function(evt) {
-                        const items = [...evt.to.querySelectorAll('[data-queue-index]')];
-                        window._queueNewOrder = items.map(item => parseInt(item.getAttribute('data-queue-index')));
-                        window._queueSortChanged = true;
-                    });
-                }, 800);
-            """
-            )
+            # 检测拖拽排序：拖拽中跳过，松手后读取 DOM 顺序写入 queue_file
+            _prev_order = None
 
             async def check_sort_update():
-                result = await ui.run_javascript(
-                    """
-                    if (window._queueSortChanged) {
-                        window._queueSortChanged = false;
-                        return JSON.stringify(window._queueNewOrder);
-                    }
-                    return null;
-                    """,
-                    respond=True,
-                )
-                if result:
-                    new_order = json.loads(result)
+                nonlocal _prev_order
+                result = await ui.run_javascript("""
+                    if (document.querySelector('.sortable-drag, .sortable-ghost, .sortable-chosen'))
+                        return '__DRAGGING__';
+                    const items = document.querySelectorAll('[data-queue-uname]');
+                    if (!items.length) return null;
+                    const order = Array.from(items).map(item =>
+                        item.getAttribute('data-queue-uname')
+                    );
+                    const pending = window._queuePendingRefresh ? true : false;
+                    window._queuePendingRefresh = false;
+                    return JSON.stringify({order: order, pending: pending});
+                """)
+                if result is None or result == '__DRAGGING__':
+                    return
+                data = json.loads(result)
+                new_order = data["order"]
+                pending = data["pending"]
+                order_str = json.dumps(new_order, sort_keys=True)
+                if _prev_order is not None and order_str != _prev_order:
                     if new_order:
-                        update_queue([int(i) for i in new_order])
+                        update_queue(new_order)
+                _prev_order = order_str
+                if pending:
+                    try:
+                        user_card.clear()
+                        user_page()
+                        user_card.make_sortable(handle=".handle")
+                    except Exception:
+                        pass
 
-            ui.timer(0.5, check_sort_update)
+            ui.timer(1.5, check_sort_update)
 
             room_id_input = ui.input(
                 "房间号", on_change=lambda: base_config.save(config)
@@ -301,6 +328,9 @@ def _():
             room_id_input.bind_value(
                 config["general"], "room_id"
             )  # 实时写入房间号到配置文件
+            ui.switch("连接至弹幕服务器").on_value_change(
+                lambda e: start_handler() if e else client.stop()
+            )
 
 
 if __name__ == "__main__":
