@@ -16,3 +16,8 @@ dependencies = [
     "tomlkit>=0.15.0",
     "yarl>=1.24.2",
 ]
+
+[dependency-groups]
+dev = [
+    "pyinstaller>=6.21.0",
+]

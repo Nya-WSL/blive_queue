@@ -35,9 +35,19 @@ host = config["general"]["host"]  # type: ignore[index]
 port = config["general"]["port"]  # type: ignore[index]
 queue_file = config["str"]["queue_file"]  # type: ignore[index]
 
+header = f"排队请扣{'、'.join(config['str']['queue_keyword'])}\n"
+
 if not os.path.exists(queue_file):
     with open(queue_file, "w", encoding="utf-8") as f:
-        f.write(f"扣 {config['str']['queue_keyword']} 排队")
+        f.write(header)
+else:
+    with open(queue_file, "r", encoding="utf-8") as f:
+        queue_content = f.readlines()
+
+    queue_content[0] = header
+
+    with open(queue_file, "w", encoding="utf-8") as f:
+        f.writelines(queue_content)
 
 # 删除旧的二维码图片
 for file in os.listdir(os.getcwd()):
@@ -301,6 +311,17 @@ def _():
             async def check_sort_update():
                 nonlocal _prev_order
                 global _pending_refresh
+                # 优先处理待刷新（即使 DOM 为空也要刷）
+                if _pending_refresh:
+                    _pending_refresh = False
+                    try:
+                        user_card.clear()
+                        user_page()
+                        user_card.make_sortable(handle=".handle")
+                    except Exception:
+                        pass
+                    _prev_order = None  # DOM 已重建，上次顺序失效
+                    return
                 result = await ui.run_javascript("""
                     if (document.querySelector('.sortable-drag, .sortable-ghost, .sortable-chosen'))
                         return '__DRAGGING__';
@@ -318,16 +339,10 @@ def _():
                     if new_order:
                         update_queue(new_order)
                 _prev_order = order_str
-                if _pending_refresh:
-                    _pending_refresh = False
-                    try:
-                        user_card.clear()
-                        user_page()
-                        user_card.make_sortable(handle=".handle")
-                    except Exception:
-                        pass
 
             ui.timer(1.5, check_sort_update)
+
+            config = base_config.load()
 
             room_id_input = ui.input(
                 "房间号", on_change=lambda: base_config.save(config)
@@ -336,10 +351,17 @@ def _():
                 config["general"], "room_id"
             )  # 实时写入房间号到配置文件
 
+            danmaku_switch = ui.switch("连接至弹幕服务器")
+
             async def toggle_connection(e):
                 global client, _client_task
                 if e.value:
                     # 打开连接
+                    room_id = config["general"].get("room_id", "")
+                    if not room_id or not str(room_id).strip():
+                        ui.notify("请先填写房间号", type="warning")
+                        danmaku_switch.set_value(False)
+                        return
                     if _client_task and not _client_task.done():
                         ui.notify("弹幕服务器已连接", type="warning")
                         return
@@ -356,7 +378,7 @@ def _():
                         ui.notify("已断开弹幕服务器", type="warning")
                         logger.info("已断开弹幕服务器")
 
-            ui.switch("连接至弹幕服务器", on_change=toggle_connection)
+            danmaku_switch.on_value_change(toggle_connection)
 
 
 if __name__ == "__main__":
@@ -369,6 +391,7 @@ if __name__ == "__main__":
             host=host,
             port=port,
             title=f"blive_queue | {version}",
+            favicon="static/logo.ico",
             reload=False,
             show=False,
             native=True,

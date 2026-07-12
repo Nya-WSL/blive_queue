@@ -104,23 +104,26 @@ def login(loginInfo):
         logger.error("获取buvid3失败，无法登录")
         return False
 
-    response = requests.get(
+    sess = requests.Session()
+    sess.headers.update({
+        "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
+    })
+
+    response = sess.get(
         url="https://passport.bilibili.com/x/passport-login/web/qrcode/poll",
-        headers={
-            "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36"
-        },
         params={"qrcode_key": loginInfo},
     )
 
     pollInfo = response.json()
 
-    if pollInfo["data"]["code"] == 0:
-        logger.info("登录成功")
-    else:
+    if pollInfo["data"]["code"] != 0:
         return BiliPollError(pollInfo)
 
-    cookies = response.cookies
-    cookies = requests.utils.dict_from_cookiejar(cookies)
+    # 跟进 data.url 获取 SESSDATA
+    url = pollInfo["data"]["url"]
+    sess.get(url, allow_redirects=True)
+
+    cookies = requests.utils.dict_from_cookiejar(sess.cookies)
 
     if buvid3:
         cookies["buvid3"] = buvid3
@@ -131,6 +134,6 @@ def login(loginInfo):
     config["cookies"] = cookies
     base_config.save(config)
 
-    # get_uname(cookie["DedeUserID"])
+    logger.info(f"登录成功，已写入 SESSDATA={cookies.get('SESSDATA', '???' )[:20]}...")
 
     return True
