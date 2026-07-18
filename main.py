@@ -36,7 +36,7 @@ port = config["general"]["port"]  # type: ignore[index]
 queue_file = config["str"]["queue_file"]  # type: ignore[index]
 queue_sep = config["str"].get("queue_separator", " | ")  # type: ignore[index]
 
-header = f"排队请扣{'、'.join(config['str']['queue_keyword'])}"
+header = f"排队请扣: {' | '.join(config['str']['queue_keyword'])}"
 
 
 def _read_queues() -> list[str]:
