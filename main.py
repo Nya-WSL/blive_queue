@@ -422,6 +422,15 @@ def _():
 
             danmaku_switch.on_value_change(toggle_connection)
 
+            fake_names = ["排队姬"]
+
+            def fake_queue():
+                import random
+                uname = f"{random.choice(fake_names)}_{random.randint(1, 999)}"
+                append_queue(uname)
+
+            ui.button("生成队列(测试)", on_click=fake_queue).props("flat")
+
 
 if __name__ == "__main__":
     try:
