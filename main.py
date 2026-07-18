@@ -36,7 +36,7 @@ port = config["general"]["port"]  # type: ignore[index]
 queue_file = config["str"]["queue_file"]  # type: ignore[index]
 queue_sep = config["str"].get("queue_separator", " | ")  # type: ignore[index]
 
-header = f"排队请扣{'、'.join(config['str']['queue_keyword'])}\n"
+header = f"排队请扣{'、'.join(config['str']['queue_keyword'])}"
 
 
 def _read_queues() -> list[str]:
@@ -193,6 +193,19 @@ def check_uname(uname: str):
     """
     queues = _read_queues()
     return uname in queues
+
+
+def clear_queue():
+    """清空队列（保留 header 行），并刷新界面"""
+    queues = _read_queues()
+    _write_queues([queues[0]])
+
+    global _pending_refresh
+    _pending_refresh = True
+
+    with main_card:
+        ui.notify("队列已清空")
+
 
 def update_queue(new_order):
     """根据新的用户顺序重新排列队列文件，并持久化写入文件
@@ -409,6 +422,7 @@ def _():
                         ui.notify("弹幕服务器已连接", type="warning")
                         return
                     _client_task = asyncio.create_task(start_handler())
+                    ui.notify("已连接至弹幕服务器", type="positive")
                     logger.info("已连接至弹幕服务器")
                 else:
                     # 关闭连接
@@ -430,7 +444,9 @@ def _():
                 uname = f"{random.choice(fake_names)}_{random.randint(1, 999)}"
                 append_queue(uname)
 
-            ui.button("生成队列(测试)", on_click=fake_queue).props("flat")
+            with ui.row():
+                ui.button("生成队列(测试)", on_click=fake_queue).props("flat")
+                ui.button("清空队列", on_click=clear_queue, color="red").props("flat")
 
 
 if __name__ == "__main__":
