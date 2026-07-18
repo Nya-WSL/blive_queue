@@ -153,6 +153,31 @@ def delete_queue(index):
         ui.notify(f"已从队列移除 {uname}")
 
 
+def cancel_queue(uname: str):
+    """
+    从队列文件中删除指定用户名的用户并触发界面刷新
+
+    若用户不存在于队列中则不做任何操作
+
+    Args:
+        uname (str): 要取消排队的用户名
+    """
+    with open(queue_file, "r", encoding="utf-8") as f:
+        queues = [line.strip("\n") for line in f.readlines()]
+
+    if uname in queues:
+        queues.remove(uname)
+
+        with open(queue_file, "w", encoding="utf-8") as f:
+            f.writelines(q + "\n" for q in queues)
+
+        with main_card:
+            ui.notify(f"{uname} 已取消排队")
+
+        global _pending_refresh
+        _pending_refresh = True
+
+
 def update_queue(new_order):
     """根据新的用户顺序重新排列队列文件，并持久化写入文件
 
@@ -254,8 +279,14 @@ class BiliHandler(blivedm.BaseHandler):
         uname = message.uname
         msg = message.msg
 
+        for i in base_config.get("str", "cancel_keyword", ["取消排队"]):
+            if msg == i:
+                cancel_queue(uname)
+                logger.info(f"[{client.room_id}] {uname}: {msg} 取消排队")
+                break
+
         for i in base_config.get("str", "queue_keyword", ["排队"]):
-            if re.search(re.escape(i), msg):
+            if msg == i:
                 append_queue(uname)
                 logger.info(f"[{client.room_id}] {uname}: {msg} 触发排队")
                 break
@@ -276,8 +307,14 @@ class BiliHandler(blivedm.BaseHandler):
         uname = message.uname
         msg = message.message
 
+        for i in base_config.get("str", "cancel_keyword", ["取消排队"]):
+            if msg == i:
+                cancel_queue(uname)
+                logger.info(f"[{client.room_id}][SC] {uname}: {msg} 取消排队")
+                break
+
         for i in base_config.get("str", "queue_keyword", ["排队"]):
-            if re.search(re.escape(i), msg):
+            if msg == i:
                 append_queue(uname)
                 logger.info(f"[{client.room_id}][SC] {uname}: {msg} 触发排队")
                 break
