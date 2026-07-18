@@ -34,6 +34,7 @@ config = base_config.load()
 host = config["general"]["host"]  # type: ignore[index]
 port = config["general"]["port"]  # type: ignore[index]
 queue_file = config["str"]["queue_file"]  # type: ignore[index]
+queue_sep = config["str"].get("queue_separator", " | ")  # type: ignore[index]
 
 header = f"排队请扣{'、'.join(config['str']['queue_keyword'])}\n"
 
@@ -43,15 +44,15 @@ def _read_queues() -> list[str]:
     with open(queue_file, "r", encoding="utf-8") as f:
         lines = [line.strip("\n") for line in f.readlines()]
     header = lines[0] if lines else ""
-    items = [x.strip() for x in lines[1].split(",") if x.strip()] if len(lines) > 1 else []
+    items = [x.strip() for x in lines[1].split(queue_sep) if x.strip()] if len(lines) > 1 else []
     return [header] + items
 
 
 def _write_queues(queues: list[str]):
-    """写入队列文件，queues[0] 为 header，其余为列表项（用逗号拼接在第二行）"""
+    """写入队列文件，queues[0] 为 header，其余为列表项"""
     with open(queue_file, "w", encoding="utf-8") as f:
         f.write(queues[0] + "\n")
-        f.write(", ".join(queues[1:]) + "\n")
+        f.write(queue_sep.join(queues[1:]) + "\n")
 
 
 if not os.path.exists(queue_file):
