@@ -35,6 +35,7 @@ host = config["general"]["host"]  # type: ignore[index]
 port = config["general"]["port"]  # type: ignore[index]
 queue_file = config["str"]["queue_file"]  # type: ignore[index]
 queue_sep = config["str"].get("queue_separator", " | ")  # type: ignore[index]
+queue_limit = config["str"].get("queue_limit", 0)  # type: ignore[index]
 
 header = f"排队请扣: {' | '.join(config['str']['queue_keyword'])}"
 
@@ -131,6 +132,11 @@ def append_queue(uname: str):
     queues = _read_queues()
 
     if uname not in queues:
+        current = len(queues) - 1  # 当前排队人数（不含 header）
+        if queue_limit > 0 and current >= queue_limit:
+            with main_card:
+                ui.notify(f"队列已满 ({current}/{queue_limit})，{uname} 加入失败", type="warning")
+            return
         queues.append(uname)
         _write_queues(queues)
 

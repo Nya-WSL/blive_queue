@@ -16,6 +16,7 @@ queue_keyword = ["1", "排队"] # 弹幕关键字
 cancel_keyword = ["取消排队"] # 取消排队关键字
 queue_file = "queue.txt" # 队列文件路径
 queue_separator = ", " # 队列文件分隔符
+queue_limit = 5 # 队列上限（0 表示不限制）
 
 [cookies]
 SESSDATA = "" # B站SESSDATA
