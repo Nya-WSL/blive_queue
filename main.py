@@ -19,7 +19,7 @@ from typing import Optional
 from blivedm import blivedm
 from multiprocessing import freeze_support
 
-version = "1.0.0"
+version = "1.1.0"
 logger = log.logger
 logger.debug("version: {}", version)
 
@@ -37,17 +37,30 @@ queue_file = config["str"]["queue_file"]  # type: ignore[index]
 
 header = f"排队请扣{'、'.join(config['str']['queue_keyword'])}\n"
 
+
+def _read_queues() -> list[str]:
+    """读取队列文件，返回 [header, item1, item2, ...]"""
+    with open(queue_file, "r", encoding="utf-8") as f:
+        lines = [line.strip("\n") for line in f.readlines()]
+    header = lines[0] if lines else ""
+    items = [x.strip() for x in lines[1].split(",") if x.strip()] if len(lines) > 1 else []
+    return [header] + items
+
+
+def _write_queues(queues: list[str]):
+    """写入队列文件，queues[0] 为 header，其余为列表项（用逗号拼接在第二行）"""
+    with open(queue_file, "w", encoding="utf-8") as f:
+        f.write(queues[0] + "\n")
+        f.write(", ".join(queues[1:]) + "\n")
+
+
 if not os.path.exists(queue_file):
     with open(queue_file, "w", encoding="utf-8") as f:
-        f.write(header)
+        f.write(header + "\n")
 else:
-    with open(queue_file, "r", encoding="utf-8") as f:
-        queue_content = f.readlines()
-
-    queue_content[0] = header
-
-    with open(queue_file, "w", encoding="utf-8") as f:
-        f.writelines(queue_content)
+    queues = _read_queues()
+    queues[0] = header
+    _write_queues(queues)
 
 # 删除旧的二维码图片
 for file in os.listdir(os.getcwd()):
@@ -114,19 +127,15 @@ def append_queue(uname: str):
     Raises:
         无显式异常抛出；页面刷新失败时异常会被静默捕获
     """
-    with open(queue_file, "r", encoding="utf-8") as f:
-        queues = [line.strip("\n") for line in f.readlines()]
+    queues = _read_queues()
 
     if uname not in queues:
         queues.append(uname)
-
-    with open(queue_file, "w", encoding="utf-8") as f:
-        f.writelines(q + "\n" for q in queues)
+        _write_queues(queues)
 
     with main_card:
         ui.notify(f"{uname} 已加入队列: {len(queues) - 1}", type="positive")
 
-    # 标记待刷新，由 check_sort_update 在非拖拽状态下统一刷新，避免拖拽中销毁 DOM
     global _pending_refresh
     _pending_refresh = True
 
@@ -136,18 +145,15 @@ def delete_queue(index):
     从队列文件中删除指定索引的用户并写回文件
 
     Args:
-        index (int): 要删除的用户在队列中的行索引
+        index (int): 要删除的用户在队列中的行索引（不含 header）
 
     Returns:
         None
     """
-    with open(queue_file, "r", encoding="utf-8") as f:
-        queues = [line.strip("\n") for line in f.readlines()]
+    queues = _read_queues()
 
     uname = queues.pop(index)
-
-    with open(queue_file, "w", encoding="utf-8") as f:
-        f.writelines(q + "\n" for q in queues)
+    _write_queues(queues)
 
     with main_card:
         ui.notify(f"已从队列移除 {uname}")
@@ -162,14 +168,11 @@ def cancel_queue(uname: str):
     Args:
         uname (str): 要取消排队的用户名
     """
-    with open(queue_file, "r", encoding="utf-8") as f:
-        queues = [line.strip("\n") for line in f.readlines()]
+    queues = _read_queues()
 
     if uname in queues:
         queues.remove(uname)
-
-        with open(queue_file, "w", encoding="utf-8") as f:
-            f.writelines(q + "\n" for q in queues)
+        _write_queues(queues)
 
         with main_card:
             ui.notify(f"{uname} 已取消排队")
@@ -177,6 +180,18 @@ def cancel_queue(uname: str):
         global _pending_refresh
         _pending_refresh = True
 
+
+def check_uname(uname: str):
+    """如果用户名在队列中，则返回True，否则返回False
+
+    Args:
+        uname (str): 用户名
+
+    Returns:
+        bool: 用户名是否在队列中
+    """
+    queues = _read_queues()
+    return uname in queues
 
 def update_queue(new_order):
     """根据新的用户顺序重新排列队列文件，并持久化写入文件
@@ -187,18 +202,9 @@ def update_queue(new_order):
     Returns:
         None
     """
-    with open(queue_file, "r", encoding="utf-8") as f:
-        queues = [line.strip("\n") for line in f.readlines()]
-
+    queues = _read_queues()
     header = queues[0]
-    # 按 new_order 中的用户名顺序重建
-    reordered = [header] + new_order
-
-    with open(queue_file, "w", encoding="utf-8") as f:
-        f.writelines(q + "\n" for q in reordered)
-
-    # with main_card:
-    #     ui.notify("队列顺序已更新", type="positive")
+    _write_queues([header] + new_order)
 
 
 def check_sessdata() -> bool:
@@ -250,8 +256,7 @@ def user_page():
         user_page()
 
     with user_card:
-        with open(queue_file, "r", encoding="utf-8") as f:
-            queues = [line.strip("\n") for line in f.readlines()]
+        queues = _read_queues()
         queues.pop(0)
         for idx, uname in enumerate(queues):
             row = ui.row().classes("items-center gap-2")
@@ -280,13 +285,13 @@ class BiliHandler(blivedm.BaseHandler):
         msg = message.msg
 
         for i in base_config.get("str", "cancel_keyword", ["取消排队"]):
-            if msg == i:
+            if msg == i and check_uname(uname):
                 cancel_queue(uname)
                 logger.info(f"[{client.room_id}] {uname}: {msg} 取消排队")
                 break
 
         for i in base_config.get("str", "queue_keyword", ["排队"]):
-            if msg == i:
+            if msg == i and not check_uname(uname):
                 append_queue(uname)
                 logger.info(f"[{client.room_id}] {uname}: {msg} 触发排队")
                 break
@@ -308,13 +313,13 @@ class BiliHandler(blivedm.BaseHandler):
         msg = message.message
 
         for i in base_config.get("str", "cancel_keyword", ["取消排队"]):
-            if msg == i:
+            if msg == i and check_uname(uname):
                 cancel_queue(uname)
                 logger.info(f"[{client.room_id}][SC] {uname}: {msg} 取消排队")
                 break
 
         for i in base_config.get("str", "queue_keyword", ["排队"]):
-            if msg == i:
+            if msg == i and not check_uname(uname):
                 append_queue(uname)
                 logger.info(f"[{client.room_id}][SC] {uname}: {msg} 触发排队")
                 break
