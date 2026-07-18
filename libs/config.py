@@ -72,6 +72,8 @@ class Config:
         config = self.load()
 
         for example_table, example_data in example_config.items():
+            if example_table == "cookies":
+                continue  # 跳过 cookies 表，保留用户配置不变
             if example_table not in config:
                 # 如果键不存在，直接复制默认值
                 config[example_table] = example_data
